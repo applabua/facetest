@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-  <title>Управление взглядом — full‑screen</title>
+  <title>Плавное управление взглядом</title>
   <style>
     html, body {
       margin: 0; padding: 0;
@@ -14,11 +14,12 @@
     #dot {
       position: absolute;
       width: 20px; height: 20px;
-      margin: -10px 0 0 -10px; /* смещение, чтобы точка центровалась */
+      margin: -10px 0 0 -10px;
       border-radius: 50%;
       background: lime;
       pointer-events: none;
       z-index: 10;
+      will-change: transform;
     }
     #actionBtn {
       position: absolute;
@@ -38,69 +39,66 @@
   <button id="actionBtn">Нажми меня взглядом</button>
   <div id="dot"></div>
 
-  <!-- WebGazer.js -->
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
   <script>
     const dot = document.getElementById('dot');
     const btn = document.getElementById('actionBtn');
 
-    // порог задержки взгляда (в миллисекундах)
-    const DWELL_THRESHOLD = 500;
+    // raw gaze
+    let gazeX = window.innerWidth/2, gazeY = window.innerHeight/2;
+    // smoothed gaze
+    let smoothX = gazeX, smoothY = gazeY;
+    const SMOOTHING = 0.2;       // от 0 (никакой фильтрации) до 1 (максимальная фильтрация)
+    const DWELL_THRESHOLD = 500; // мс для «задержки взгляда»
 
     let dwellStart = null;
     let dwellTriggered = false;
 
-    // инициализируем WebGazer
+    // получаем «сырые» координаты
     webgazer
-      .setRegression('ridge')           // алгоритм регрессии
-      .setGazeListener(onGaze)         // функция‑лисенер
+      .setRegression('ridge')
+      .setGazeListener((data) => {
+        if (data) {
+          gazeX = data.x;
+          gazeY = data.y;
+        }
+      })
       .begin()
       .then(() => {
-        // прячем видео и оверлеи WebGazer
         webgazer.showVideo(false);
         webgazer.showFaceOverlay(false);
         webgazer.showPredictionPoints(false);
       });
 
-    function onGaze(data, elapsedTime) {
-      if (!data) {
-        resetDwell();
-        return;
-      }
-      const x = data.x;   // координата взгляда по X
-      const y = data.y;   // координата взгляда по Y
+    // плавная анимация точки и проверка dwell‑click
+    function animate(time) {
+      // сглаживаем
+      smoothX += (gazeX - smoothX) * SMOOTHING;
+      smoothY += (gazeY - smoothY) * SMOOTHING;
+      dot.style.transform = `translate(${smoothX}px, ${smoothY}px)`;
 
-      // двигаем точку
-      dot.style.left = x + 'px';
-      dot.style.top  = y + 'px';
-
-      // проверяем, смотрим ли мы на кнопку
+      // проверяем, находится ли точка на кнопке
       const rect = btn.getBoundingClientRect();
-      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      if (smoothX >= rect.left && smoothX <= rect.right && smoothY >= rect.top && smoothY <= rect.bottom) {
         if (dwellStart === null) {
-          dwellStart = performance.now();
+          dwellStart = time;
           dwellTriggered = false;
-        } else {
-          const dt = performance.now() - dwellStart;
-          if (dt >= DWELL_THRESHOLD && !dwellTriggered) {
-            dwellTriggered = true;
-            btn.click();        // вызываем клик
-          }
+        } else if (!dwellTriggered && (time - dwellStart) >= DWELL_THRESHOLD) {
+          dwellTriggered = true;
+          btn.click();
         }
       } else {
-        resetDwell();
+        dwellStart = null;
+        dwellTriggered = false;
       }
-    }
 
-    function resetDwell() {
-      dwellStart = null;
-      dwellTriggered = false;
+      requestAnimationFrame(animate);
     }
+    requestAnimationFrame(animate);
 
-    // что происходит при «нажатии» взглядом
     btn.addEventListener('click', () => {
       btn.textContent = 'Нажато!';
-      setTimeout(() => btn.textContent = 'Нажми меня взглядом', 1000);
+      setTimeout(() => btn.textContent = 'Нажми меня взглядом', 800);
     });
   </script>
 </body>
