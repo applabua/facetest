@@ -1,40 +1,107 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>Управление взглядом</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <title>Управление взглядом — full‑screen</title>
   <style>
-    body { margin: 0; overflow: hidden; background: black; }
-    #dot {
-      width: 50px; height: 50px; background: lime;
-      position: absolute; top: 50%; left: 50%;
-      border-radius: 50%; transform: translate(-50%, -50%);
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #000;
     }
-    #startBtn {
-      position: absolute; top: 20px; left: 20px;
-      font-size: 18px; padding: 10px; z-index: 1;
+    #dot {
+      position: absolute;
+      width: 20px; height: 20px;
+      margin: -10px 0 0 -10px; /* смещение, чтобы точка центровалась */
+      border-radius: 50%;
+      background: lime;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #actionBtn {
+      position: absolute;
+      bottom: 40px; left: 50%;
+      transform: translateX(-50%);
+      padding: 15px 30px;
+      font-size: 18px;
+      border: none;
+      border-radius: 8px;
+      background: #1e90ff;
+      color: #fff;
+      z-index: 5;
     }
   </style>
 </head>
 <body>
-  <button id="startBtn">Старт</button>
+  <button id="actionBtn">Нажми меня взглядом</button>
   <div id="dot"></div>
+
+  <!-- WebGazer.js -->
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
   <script>
-    const dot = document.getElementById("dot");
-    const btn = document.getElementById("startBtn");
+    const dot = document.getElementById('dot');
+    const btn = document.getElementById('actionBtn');
 
-    btn.onclick = async () => {
-      await webgazer.setRegression('ridge')
-                   .setGazeListener((data, elapsedTime) => {
-        if (data == null) return;
-        let x = data.x;
-        let y = data.y;
-        dot.style.left = `${x}px`;
-        dot.style.top = `${y}px`;
-      }).begin();
-      btn.style.display = 'none';
-    };
+    // порог задержки взгляда (в миллисекундах)
+    const DWELL_THRESHOLD = 500;
+
+    let dwellStart = null;
+    let dwellTriggered = false;
+
+    // инициализируем WebGazer
+    webgazer
+      .setRegression('ridge')           // алгоритм регрессии
+      .setGazeListener(onGaze)         // функция‑лисенер
+      .begin()
+      .then(() => {
+        // прячем видео и оверлеи WebGazer
+        webgazer.showVideo(false);
+        webgazer.showFaceOverlay(false);
+        webgazer.showPredictionPoints(false);
+      });
+
+    function onGaze(data, elapsedTime) {
+      if (!data) {
+        resetDwell();
+        return;
+      }
+      const x = data.x;   // координата взгляда по X
+      const y = data.y;   // координата взгляда по Y
+
+      // двигаем точку
+      dot.style.left = x + 'px';
+      dot.style.top  = y + 'px';
+
+      // проверяем, смотрим ли мы на кнопку
+      const rect = btn.getBoundingClientRect();
+      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+        if (dwellStart === null) {
+          dwellStart = performance.now();
+          dwellTriggered = false;
+        } else {
+          const dt = performance.now() - dwellStart;
+          if (dt >= DWELL_THRESHOLD && !dwellTriggered) {
+            dwellTriggered = true;
+            btn.click();        // вызываем клик
+          }
+        }
+      } else {
+        resetDwell();
+      }
+    }
+
+    function resetDwell() {
+      dwellStart = null;
+      dwellTriggered = false;
+    }
+
+    // что происходит при «нажатии» взглядом
+    btn.addEventListener('click', () => {
+      btn.textContent = 'Нажато!';
+      setTimeout(() => btn.textContent = 'Нажми меня взглядом', 1000);
+    });
   </script>
 </body>
 </html>
