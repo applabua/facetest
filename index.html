@@ -3,49 +3,51 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Eye‑Tracker Debug</title>
+  <title>Eye‑Tracker Debug v2</title>
   <style>
-    body, html { margin:0; padding:0; overflow:hidden; background: #000; color: #0f0; }
-    #video {
-      position: absolute; top:0; left:0;
-      width: 100vw; height: auto;
-      opacity: 0.3;
-      z-index: 1;
+    body, html { margin:0; padding:0; overflow:hidden; background:#000; color:#0f0; font-family:monospace; }
+    #video, #canvas {
+      position:absolute; top:0; left:0;
+      width:100vw; height:auto;
+      opacity:0.3; z-index:1;
     }
+    #canvas { z-index:2; }
     #cursor {
-      position: absolute;
-      width: 50px; height: 50px;
-      border: 3px solid #0f0;
-      border-radius: 50%;
-      pointer-events: none;
-      transform: translate(-50%, -50%);
-      z-index: 2;
+      position:absolute; width:30px; height:30px;
+      border:2px solid #f00; border-radius:50%;
+      pointer-events:none; transform:translate(-50%,-50%);
+      z-index:3;
     }
     #btn {
-      position: absolute; bottom: 40px; left: 50%;
-      transform: translateX(-50%);
-      padding: 15px 30px; font-size: 18px;
-      background: #007aff; color: #fff;
-      border: none; border-radius: 8px;
-      z-index: 3;
+      position:absolute; bottom:40px; left:50%;
+      transform:translateX(-50%);
+      padding:12px 24px; font-size:18px;
+      background:#007aff; color:#fff; border:none; border-radius:8px;
+      z-index:4;
+    }
+    #status {
+      position:absolute; top:0; right:0;
+      padding:6px 12px; background:rgba(0,0,0,0.7);
+      color:#0f0; font-size:14px; z-index:5;
     }
     #log {
-      position: absolute; top: 0; left: 0;
-      width: 100%; max-height: 160px; overflow-y: auto;
-      font-size: 12px; line-height: 1.2;
-      background: rgba(0,0,0,0.7); color: #0f0;
-      padding: 5px; z-index: 4;
+      position:absolute; bottom:0; left:0;
+      width:100%; max-height:120px; overflow-y:auto;
+      background:rgba(0,0,0,0.8); color:#0f0; font-size:12px;
+      padding:4px; z-index:6;
     }
   </style>
 </head>
 <body>
 
 <video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
 <div id="cursor"></div>
 <button id="btn">Нажми взглядом</button>
+<div id="status">Статус: …</div>
 <pre id="log">LOG:</pre>
 
-<!-- TF.js и модель -->
+<!-- TFJS и модель facemesh -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.8.0/dist/tf-core.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.8.0/dist/tf-backend-webgl.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.2/dist/face-landmarks-detection.min.js"></script>
@@ -53,91 +55,98 @@
 <script>
 (async ()=>{
   const logEl = document.getElementById('log');
+  const statusEl = document.getElementById('status');
   function log(msg){
-    console.log(msg);
-    logEl.textContent += '\n' + msg;
+    logEl.textContent += '\n'+msg;
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  // явно выбираем WebGL-бэкенд
-  log('Инициализируем TF.js…');
+  // инициализируем TF.js
   await tf.setBackend('webgl');
   await tf.ready();
-  log('TF.js готов, бекенд = ' + tf.getBackend());
+  log('TF.js готов, бэкенд='+tf.getBackend());
 
-  // Камера 480×360 для скорости
+  // камера
   let stream;
   try {
     log('Запрашиваем камеру…');
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: 480, height: 360 }
-    });
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:480, height:360 } });
     log('Камера подключена.');
-  } catch (e) {
-    log('ОШИБКА при подключении камеры: ' + e.name + ' — ' + e.message);
+  } catch(e){
+    log('Ошибка камеры: '+e.name+' – '+e.message);
+    statusEl.textContent = 'Статус: нет камеры';
     return;
   }
-
   const video = document.getElementById('video');
   video.srcObject = stream;
-  await new Promise(res=> video.onloadedmetadata = res);
-  log(`Видео поток: ${video.videoWidth}×${video.videoHeight}`);
+  await new Promise(r=>video.onloadedmetadata=r);
+  log(`Видео: ${video.videoWidth}×${video.videoHeight}`);
 
-  // Загрузка модели
-  log('Загружаем модель FaceMesh…');
-  const model = await faceLandmarksDetection.load(
-    faceLandmarksDetection.SupportedPackages.mediapipeFacemesh
-  );
+  // канвас
+  const canvas = document.getElementById('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height= video.videoHeight;
+  const ctx = canvas.getContext('2d');
+
+  // загружаем лёгкую модель facemesh
+  log('Загружаем facemesh модель…');
+  const model = await faceLandmarksDetection.load(faceLandmarksDetection.SupportedPackages.facemesh);
   log('Модель загружена.');
 
   const cursor = document.getElementById('cursor');
-  const btn    = document.getElementById('btn');
+  const btn = document.getElementById('btn');
+  let lastBlink=0, BLINK_INTERVAL=1000;
 
-  let lastBlink = 0, BLINK_INTERVAL = 1000;
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
-  function isBlink(u,l,le,ri){ return dist(u,l)/dist(le,ri) < 0.25; }
+  function isBlink(u,l,le,ri){ return dist(u,l)/dist(le,ri)<0.25; }
 
-  // Основной цикл
-  async function frameLoop(){
-    const faces = await model.estimateFaces({
-      input: video, returnTensors:false, flipHorizontal:true
-    });
+  async function loop(){
+    // детект лица
+    const faces = await model.estimateFaces({input:video, returnTensors:false, flipHorizontal:true});
+    // очистим канвас
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
     if(faces.length){
+      statusEl.textContent = 'Статус: Лицо найдено';
+      // bounding box
+      const box=faces[0].boundingBox;
+      ctx.strokeStyle='#0f0'; ctx.lineWidth=2;
+      ctx.strokeRect(box.topLeft[0][0], box.topLeft[0][1],
+                     box.bottomRight[0][0]-box.topLeft[0][0],
+                     box.bottomRight[0][1]-box.topLeft[0][1]);
+
+      // рассчитаем взгляд по центрам радужек
       const kp = faces[0].scaledMesh;
       const L=[33,133,159,145], R=[362,263,386,374];
-
-      const leftC  = {x:(kp[L[0]][0]+kp[L[1]][0])/2, y:(kp[L[0]][1]+kp[L[1]][1])/2};
-      const rightC = {x:(kp[R[0]][0]+kp[R[1]][0])/2, y:(kp[R[0]][1]+kp[R[1]][1])/2};
-      const gaze   = {x:(leftC.x+rightC.x)/2, y:(leftC.y+rightC.y)/2};
-
+      const leftC  ={x:(kp[L[0]][0]+kp[L[1]][0])/2, y:(kp[L[0]][1]+kp[L[1]][1])/2};
+      const rightC ={x:(kp[R[0]][0]+kp[R[1]][0])/2, y:(kp[R[0]][1]+kp[R[1]][1])/2};
+      const gaze   ={x:(leftC.x+rightC.x)/2, y:(leftC.y+rightC.y)/2};
       const sx = gaze.x/video.videoWidth  * window.innerWidth;
       const sy = gaze.y/video.videoHeight * window.innerHeight;
-      cursor.style.left = sx + 'px';
-      cursor.style.top  = sy + 'px';
+      cursor.style.left=sx+'px'; cursor.style.top=sy+'px';
 
-      const blinkL = isBlink(
-        {x:kp[L[2]][0],y:kp[L[2]][1]}, {x:kp[L[3]][0],y:kp[L[3]][1]},
-        {x:kp[L[0]][0],y:kp[L[0]][1]}, {x:kp[L[1]][0],y:kp[L[1]][1]}
-      );
-      const blinkR = isBlink(
-        {x:kp[R[2]][0],y:kp[R[2]][1]}, {x:kp[R[3]][0],y:kp[R[3]][1]},
-        {x:kp[R[0]][0],y:kp[R[0]][1]}, {x:kp[R[1]][0],y:kp[R[1]][1]}
-      );
-      const now = performance.now();
-      if(blinkL && blinkR && now - lastBlink > BLINK_INTERVAL){
-        lastBlink = now;
-        const rect = btn.getBoundingClientRect();
-        if(sx >= rect.left && sx <= rect.right && sy >= rect.top && sy <= rect.bottom){
-          log('Клик взглядом по кнопке!');
+      // моргание
+      const blinkL=isBlink({x:kp[L[2]][0],y:kp[L[2]][1]}, {x:kp[L[3]][0],y:kp[L[3]][1]}, leftC, rightC);
+      const blinkR=isBlink({x:kp[R[2]][0],y:kp[R[2]][1]}, {x:kp[R[3]][0],y:kp[R[3]][1]}, leftC, rightC);
+      const now=performance.now();
+      if(blinkL && blinkR && now-lastBlink>BLINK_INTERVAL){
+        lastBlink=now;
+        const rect=btn.getBoundingClientRect();
+        if(sx>=rect.left && sx<=rect.right && sy>=rect.top && sy<=rect.bottom){
+          log('👁️‍🗨️ Click by blink');
           btn.click();
-        } else log('Blink, но не на кнопке');
+        }
       }
+    } else {
+      statusEl.textContent = 'Статус: Лицо не найдено';
     }
-    requestAnimationFrame(frameLoop);
+
+    requestAnimationFrame(loop);
   }
 
-  btn.addEventListener('click', ()=> alert('Кнопка нажата взглядом!'));
-  frameLoop();
+  btn.addEventListener('click',()=>alert('Кнопка нажата взглядом!'));
+  loop();
+
 })();
 </script>
 
