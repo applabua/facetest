@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Eye‑Tracker Debug</title>
+  <style>
+    body, html { margin:0; padding:0; overflow:hidden; background: #000; color: #0f0; }
+    #video {
+      position: absolute;
+      top:0; left:0;
+      width: 100vw;
+      height: auto;
+      opacity: 0.3;         /* чтобы видеть курсор и кнопку поверх */
+    }
+    #cursor {
+      position: absolute;
+      width: 50px;
+      height: 50px;
+      border: 2px solid #0f0;
+      border-radius: 50%;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+    }
+    #btn {
+      position: absolute;
+      bottom: 40px; left: 50%;
+      transform: translateX(-50%);
+      padding: 15px 30px;
+      font-size: 18px;
+      background: #007aff; color: #fff;
+      border: none; border-radius: 8px;
+    }
+    #log {
+      position: absolute; top: 0; left: 0;
+      width: 100%; max-height: 150px; overflow-y: auto;
+      font-size: 12px; line-height: 1.2;
+      background: rgba(0,0,0,0.7); color: #0f0;
+      padding: 5px;
+    }
+  </style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline></video>
+<div id="cursor"></div>
+<button id="btn">Нажми взглядом</button>
+<pre id="log">LOG:</pre>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.8.0/dist/tf-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.8.0/dist/tf-backend-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.2/dist/face-landmarks-detection.min.js"></script>
+
+<script>
+(async ()=>{
+  const logEl = document.getElementById('log');
+  function log(msg){
+    console.log(msg);
+    logEl.textContent += '\n' + msg;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // 1. Запрос прав и подключение камеры
+  let stream;
+  try {
+    log('Запрашиваем камеру…');
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+    log('Камера подключена.');
+  } catch (e) {
+    log('ОШИБКА при подключении камеры: ' + e.name + ' — ' + e.message);
+    return;
+  }
+
+  const video = document.getElementById('video');
+  video.srcObject = stream;
+  await new Promise(res=> video.onloadedmetadata = res);
+  log(`Видео поток: ${video.videoWidth}×${video.videoHeight}`);
+
+  // 2. Загрузка модели
+  log('Загружаем модель FaceMesh…');
+  const model = await faceLandmarksDetection.load(faceLandmarksDetection.SupportedPackages.mediapipeFacemesh);
+  log('Модель загружена.');
+
+  const cursor = document.getElementById('cursor');
+  const btn    = document.getElementById('btn');
+
+  let lastBlink = 0;
+  const BLINK_INTERVAL = 1000; // мс
+
+  function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+  function isBlink(u,l,le,ri){ return dist(u,l)/dist(le,ri) < 0.25; }
+
+  async function frameLoop(){
+    const faces = await model.estimateFaces({input: video, returnTensors:false, flipHorizontal:true});
+    if(faces.length){
+      const keypoints = faces[0].scaledMesh;
+      const L=[33,133,159,145], R=[362,263,386,374];
+
+      const leftC  ={ x:(keypoints[L[0]][0]+keypoints[L[1]][0])/2, y:(keypoints[L[0]][1]+keypoints[L[1]][1])/2 };
+      const rightC ={ x:(keypoints[R[0]][0]+keypoints[R[1]][0])/2, y:(keypoints[R[0]][1]+keypoints[R[1]][1])/2 };
+      const gaze   ={ x:(leftC.x+rightC.x)/2, y:(leftC.y+rightC.y)/2 };
+      const screenX= gaze.x/video.videoWidth * window.innerWidth;
+      const screenY= gaze.y/video.videoHeight* window.innerHeight;
+
+      cursor.style.left=screenX+'px';
+      cursor.style.top =screenY+'px';
+
+      const blinkL=isBlink(
+        {x:keypoints[L[2]][0],y:keypoints[L[2]][1]},
+        {x:keypoints[L[3]][0],y:keypoints[L[3]][1]},
+        {x:keypoints[L[0]][0],y:keypoints[L[0]][1]},
+        {x:keypoints[L[1]][0],y:keypoints[L[1]][1]}
+      );
+      const blinkR=isBlink(
+        {x:keypoints[R[2]][0],y:keypoints[R[2]][1]},
+        {x:keypoints[R[3]][0],y:keypoints[R[3]][1]},
+        {x:keypoints[R[0]][0],y:keypoints[R[0]][1]},
+        {x:keypoints[R[1]][0],y:keypoints[R[1]][1]}
+      );
+      const now=performance.now();
+      if(blinkL && blinkR && now-lastBlink>BLINK_INTERVAL){
+        lastBlink=now;
+        const rect=btn.getBoundingClientRect();
+        if(screenX>=rect.left && screenX<=rect.right && screenY>=rect.top&&screenY<=rect.bottom){
+          log('Клик взглядом по кнопке!');
+          btn.click();
+        } else log('Blink, но не на кнопке');
+      }
+    }
+    requestAnimationFrame(frameLoop);
+  }
+
+  btn.addEventListener('click', ()=> alert('Кнопка нажата взглядом!'));
+  frameLoop();
+})();
+</script>
+
+</body>
+</html>
