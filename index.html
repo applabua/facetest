@@ -2,15 +2,15 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Eye‑Tracker Debug v2</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eye‑Tracker Debug v3</title>
   <style>
-    body, html { margin:0; padding:0; overflow:hidden; background:#000; color:#0f0; font-family:monospace; }
+    body, html { margin:0; padding:0; overflow:hidden; background:#000; color:#0f0; }
     #video, #canvas {
       position:absolute; top:0; left:0;
       width:100vw; height:auto;
-      opacity:0.3; z-index:1;
     }
+    #video { opacity:1; z-index:1; }
     #canvas { z-index:2; }
     #cursor {
       position:absolute; width:30px; height:30px;
@@ -18,23 +18,23 @@
       pointer-events:none; transform:translate(-50%,-50%);
       z-index:3;
     }
+    #status {
+      position:absolute; top:0; right:0;
+      background:rgba(0,0,0,0.7); padding:4px 8px;
+      z-index:4;
+    }
+    #log {
+      position:absolute; bottom:0; left:0;
+      width:100%; max-height:120px; overflow-y:auto;
+      background:rgba(0,0,0,0.8); padding:4px; font-family:monospace;
+      z-index:5;
+    }
     #btn {
       position:absolute; bottom:40px; left:50%;
       transform:translateX(-50%);
       padding:12px 24px; font-size:18px;
       background:#007aff; color:#fff; border:none; border-radius:8px;
-      z-index:4;
-    }
-    #status {
-      position:absolute; top:0; right:0;
-      padding:6px 12px; background:rgba(0,0,0,0.7);
-      color:#0f0; font-size:14px; z-index:5;
-    }
-    #log {
-      position:absolute; bottom:0; left:0;
-      width:100%; max-height:120px; overflow-y:auto;
-      background:rgba(0,0,0,0.8); color:#0f0; font-size:12px;
-      padding:4px; z-index:6;
+      z-index:6;
     }
   </style>
 </head>
@@ -47,7 +47,6 @@
 <div id="status">Статус: …</div>
 <pre id="log">LOG:</pre>
 
-<!-- TFJS и модель facemesh -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.8.0/dist/tf-core.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.8.0/dist/tf-backend-webgl.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.2/dist/face-landmarks-detection.min.js"></script>
@@ -61,35 +60,33 @@
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  // инициализируем TF.js
-  await tf.setBackend('webgl');
-  await tf.ready();
-  log('TF.js готов, бэкенд='+tf.getBackend());
+  // Инициация TF.js
+  await tf.setBackend('webgl'); await tf.ready();
+  log('TF.js backend='+tf.getBackend());
 
-  // камера
+  // Камера
   let stream;
   try {
     log('Запрашиваем камеру…');
     stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:480, height:360 } });
     log('Камера подключена.');
   } catch(e){
-    log('Ошибка камеры: '+e.name+' – '+e.message);
-    statusEl.textContent = 'Статус: нет камеры';
+    log('Ошибка камеры: '+e.name+' '+e.message);
+    statusEl.textContent='Статус: нет камеры';
     return;
   }
   const video = document.getElementById('video');
   video.srcObject = stream;
-  await new Promise(r=>video.onloadedmetadata=r);
+  await new Promise(r=> video.onloadedmetadata = r);
   log(`Видео: ${video.videoWidth}×${video.videoHeight}`);
 
-  // канвас
+  // Canvas для отрисовки
   const canvas = document.getElementById('canvas');
-  canvas.width = video.videoWidth;
-  canvas.height= video.videoHeight;
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
   const ctx = canvas.getContext('2d');
 
-  // загружаем лёгкую модель facemesh
-  log('Загружаем facemesh модель…');
+  // Загрузка модели facemesh
+  log('Загружаем facemesh…');
   const model = await faceLandmarksDetection.load(faceLandmarksDetection.SupportedPackages.facemesh);
   log('Модель загружена.');
 
@@ -97,54 +94,60 @@
   const btn = document.getElementById('btn');
   let lastBlink=0, BLINK_INTERVAL=1000;
 
-  function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+  function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
   function isBlink(u,l,le,ri){ return dist(u,l)/dist(le,ri)<0.25; }
 
   async function loop(){
-    // детект лица
-    const faces = await model.estimateFaces({input:video, returnTensors:false, flipHorizontal:true});
-    // очистим канвас
+    // получаем меш
+    const faces = await model.estimateFaces({ input:video, returnTensors:false, flipHorizontal:true });
     ctx.clearRect(0,0,canvas.width,canvas.height);
 
     if(faces.length){
-      statusEl.textContent = 'Статус: Лицо найдено';
-      // bounding box
-      const box=faces[0].boundingBox;
-      ctx.strokeStyle='#0f0'; ctx.lineWidth=2;
-      ctx.strokeRect(box.topLeft[0][0], box.topLeft[0][1],
-                     box.bottomRight[0][0]-box.topLeft[0][0],
-                     box.bottomRight[0][1]-box.topLeft[0][1]);
-
-      // рассчитаем взгляд по центрам радужек
+      statusEl.textContent='Статус: Лицо найдено';
       const kp = faces[0].scaledMesh;
+
+      // рисуем первые 20 точек меша
+      ctx.fillStyle='yellow';
+      for(let i=0; i<20; i++){
+        const [x,y] = kp[i];
+        ctx.fillRect(x-1,y-1,3,3);
+      }
+
+      // рисуем bounding box
+      const box = faces[0].boundingBox;
+      const [x1,y1] = box.topLeft[0], [x2,y2] = box.bottomRight[0];
+      ctx.strokeStyle='lime'; ctx.lineWidth=2;
+      ctx.strokeRect(x1,y1, x2-x1, y2-y1);
+
+      // считаем взгляд
       const L=[33,133,159,145], R=[362,263,386,374];
       const leftC  ={x:(kp[L[0]][0]+kp[L[1]][0])/2, y:(kp[L[0]][1]+kp[L[1]][1])/2};
       const rightC ={x:(kp[R[0]][0]+kp[R[1]][0])/2, y:(kp[R[0]][1]+kp[R[1]][1])/2};
       const gaze   ={x:(leftC.x+rightC.x)/2, y:(leftC.y+rightC.y)/2};
-      const sx = gaze.x/video.videoWidth  * window.innerWidth;
-      const sy = gaze.y/video.videoHeight * window.innerHeight;
+      const sx = gaze.x/video.videoWidth * window.innerWidth;
+      const sy = gaze.y/video.videoHeight* window.innerHeight;
       cursor.style.left=sx+'px'; cursor.style.top=sy+'px';
 
-      // моргание
-      const blinkL=isBlink({x:kp[L[2]][0],y:kp[L[2]][1]}, {x:kp[L[3]][0],y:kp[L[3]][1]}, leftC, rightC);
-      const blinkR=isBlink({x:kp[R[2]][0],y:kp[R[2]][1]}, {x:kp[R[3]][0],y:kp[R[3]][1]}, leftC, rightC);
-      const now=performance.now();
+      // blink
+      const blinkL = isBlink({x:kp[L[2]][0],y:kp[L[2]][1]}, {x:kp[L[3]][0],y:kp[L[3]][1]}, leftC, rightC);
+      const blinkR = isBlink({x:kp[R[2]][0],y:kp[R[2]][1]}, {x:kp[R[3]][0],y:kp[R[3]][1]}, leftC, rightC);
+      const now = performance.now();
       if(blinkL && blinkR && now-lastBlink>BLINK_INTERVAL){
         lastBlink=now;
         const rect=btn.getBoundingClientRect();
         if(sx>=rect.left && sx<=rect.right && sy>=rect.top && sy<=rect.bottom){
-          log('👁️‍🗨️ Click by blink');
+          log('👉 Click by blink');
           btn.click();
         }
       }
     } else {
-      statusEl.textContent = 'Статус: Лицо не найдено';
+      statusEl.textContent='Статус: Лицо не найдено';
     }
 
     requestAnimationFrame(loop);
   }
 
-  btn.addEventListener('click',()=>alert('Кнопка нажата взглядом!'));
+  btn.addEventListener('click',()=>alert('Кнопка нажата!'));
   loop();
 
 })();
