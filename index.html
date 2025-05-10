@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-  <title>Точное управление взглядом с сеткой лица</title>
+  <title>Blink‑Click Eye Control</title>
   <style>
     html, body {
       margin: 0; padding: 0;
@@ -11,10 +11,9 @@
       background:#000;
       position: relative;
     }
-    /* Контейнер для видео‑оверлеев WebGazer */
-    #webgazerVideoFeed, 
-    #webgazerFaceOverlay, 
-    #webgazerFaceFeedback {
+    /* Видео‑оверлей и сетка лица WebGazer */
+    #webgazerVideoFeed,
+    #webgazerFaceOverlay {
       position: absolute !important;
       top: 0; left: 0;
       width: 100% !important;
@@ -22,7 +21,7 @@
       pointer-events: none;
       z-index: 1;
     }
-    /* Точка взгляда */
+    /* Наша точка взгляда */
     #dot {
       position: absolute;
       width: 20px; height: 20px;
@@ -33,17 +32,15 @@
       z-index: 10;
       will-change: transform;
     }
-    /* Кнопка для dwell‑click */
+    /* Кнопка, на которую «кликают» взглядом‑миганием */
     #actionBtn {
       position: absolute;
       bottom: 40px; left: 50%;
       transform: translateX(-50%);
       padding: 15px 30px;
       font-size: 18px;
-      border: none;
-      border-radius: 8px;
-      background: #1e90ff;
-      color: #fff;
+      border: none; border-radius: 8px;
+      background: #1e90ff; color: #fff;
       z-index: 5;
     }
   </style>
@@ -52,7 +49,6 @@
   <button id="actionBtn">Нажми меня взглядом</button>
   <div id="dot"></div>
 
-  <!-- WebGazer.js -->
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
   <script>
     const dot = document.getElementById('dot');
@@ -62,14 +58,15 @@
     const BUFFER_SIZE = 8;
     let buffer = [];
 
-    // “сырые” координаты взгляда
+    // текущие «сырые» координаты взгляда
     let gazeX = window.innerWidth/2, gazeY = window.innerHeight/2;
 
-    // параметры dwell‑click
-    const DWELL = 500; // мс
-    let dwellStart = null, dwellFired = false;
+    // параметры мигания
+    const BLINK_THRESHOLD = 0.15;   // порог отношения высоты глаза к ширине
+    const BLINK_DEBOUNCE = 600;     // мс перед повторным кликом
+    let lastBlink = 0;
 
-    // Инициализация WebGazer
+    // инициализируем WebGazer
     webgazer
       .setRegression('ridge')
       .setGazeListener(data => {
@@ -80,38 +77,48 @@
       })
       .begin()
       .then(() => {
-        // включаем видео и сетку лица
         webgazer.showVideo(true);
         webgazer.showFaceOverlay(true);
-        webgazer.showPredictionPoints(true);
+        webgazer.showPredictionPoints(false);
       });
 
-    // Анимация точки и проверка клика взглядом
+    // вспомогательная функция расстояния
+    function dist(a, b) {
+      const dx = a[0] - b[0], dy = a[1] - b[1];
+      return Math.hypot(dx, dy);
+    }
+
     function animate(time) {
-      // добавляем в буфер и усредняем
+      // ————— усреднение взгляда —————
       buffer.push({x: gazeX, y: gazeY});
       if (buffer.length > BUFFER_SIZE) buffer.shift();
-      let sumX = 0, sumY = 0;
-      buffer.forEach(p => { sumX += p.x; sumY += p.y; });
-      const avgX = sumX / buffer.length;
-      const avgY = sumY / buffer.length;
-
-      // перемещаем точку
+      let sx=0, sy=0;
+      buffer.forEach(p => { sx+=p.x; sy+=p.y; });
+      const avgX = sx/buffer.length, avgY = sy/buffer.length;
       dot.style.transform = `translate(${avgX}px, ${avgY}px)`;
 
-      // dwell‑click на кнопке
-      const rect = btn.getBoundingClientRect();
-      if (avgX >= rect.left && avgX <= rect.right && avgY >= rect.top && avgY <= rect.bottom) {
-        if (dwellStart === null) {
-          dwellStart = time;
-          dwellFired = false;
-        } else if (!dwellFired && (time - dwellStart) >= DWELL) {
-          dwellFired = true;
-          btn.click();
+      // ————— blink‑click —————
+      const tracker = webgazer.getTracker();
+      const positions = tracker.getCurrentPosition();  // [[x,y],…] лицевые точки
+      if (positions && positions.length>30) {
+        // используем точки вокруг левого глаза: индексы 23 (внешний угол) и 28 (нижняя крышка)
+        const leftOuter  = positions[23];
+        const leftInner  = positions[25];
+        const leftTop    = positions[24];
+        const leftBottom = positions[26];
+        // ширина глаза ≈ dist(outer, inner), высота ≈ dist(top, bottom)
+        const w = dist(leftOuter, leftInner);
+        const h = dist(leftTop, leftBottom);
+        const ratio = h / w;
+        // если внезапно упало ниже порога — это моргновение
+        if (ratio < BLINK_THRESHOLD && (time - lastBlink) > BLINK_DEBOUNCE) {
+          lastBlink = time;
+          // проверяем, что точка взгляда над кнопкой
+          const r = btn.getBoundingClientRect();
+          if (avgX >= r.left && avgX <= r.right && avgY >= r.top && avgY <= r.bottom) {
+            btn.click();
+          }
         }
-      } else {
-        dwellStart = null;
-        dwellFired = false;
       }
 
       requestAnimationFrame(animate);
