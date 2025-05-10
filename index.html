@@ -7,36 +7,34 @@
   <style>
     body, html { margin:0; padding:0; overflow:hidden; background: #000; color: #0f0; }
     #video {
-      position: absolute;
-      top:0; left:0;
-      width: 100vw;
-      height: auto;
-      opacity: 0.3;         /* чтобы видеть курсор и кнопку поверх */
+      position: absolute; top:0; left:0;
+      width: 100vw; height: auto;
+      opacity: 0.3;
+      z-index: 1;
     }
     #cursor {
       position: absolute;
-      width: 50px;
-      height: 50px;
-      border: 2px solid #0f0;
+      width: 50px; height: 50px;
+      border: 3px solid #0f0;
       border-radius: 50%;
       pointer-events: none;
       transform: translate(-50%, -50%);
+      z-index: 2;
     }
     #btn {
-      position: absolute;
-      bottom: 40px; left: 50%;
+      position: absolute; bottom: 40px; left: 50%;
       transform: translateX(-50%);
-      padding: 15px 30px;
-      font-size: 18px;
+      padding: 15px 30px; font-size: 18px;
       background: #007aff; color: #fff;
       border: none; border-radius: 8px;
+      z-index: 3;
     }
     #log {
       position: absolute; top: 0; left: 0;
-      width: 100%; max-height: 150px; overflow-y: auto;
+      width: 100%; max-height: 160px; overflow-y: auto;
       font-size: 12px; line-height: 1.2;
       background: rgba(0,0,0,0.7); color: #0f0;
-      padding: 5px;
+      padding: 5px; z-index: 4;
     }
   </style>
 </head>
@@ -47,6 +45,7 @@
 <button id="btn">Нажми взглядом</button>
 <pre id="log">LOG:</pre>
 
+<!-- TF.js и модель -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.8.0/dist/tf-core.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.8.0/dist/tf-backend-webgl.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.2/dist/face-landmarks-detection.min.js"></script>
@@ -60,11 +59,19 @@
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  // 1. Запрос прав и подключение камеры
+  // явно выбираем WebGL-бэкенд
+  log('Инициализируем TF.js…');
+  await tf.setBackend('webgl');
+  await tf.ready();
+  log('TF.js готов, бекенд = ' + tf.getBackend());
+
+  // Камера 480×360 для скорости
   let stream;
   try {
     log('Запрашиваем камеру…');
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: 480, height: 360 }
+    });
     log('Камера подключена.');
   } catch (e) {
     log('ОШИБКА при подключении камеры: ' + e.name + ' — ' + e.message);
@@ -76,52 +83,51 @@
   await new Promise(res=> video.onloadedmetadata = res);
   log(`Видео поток: ${video.videoWidth}×${video.videoHeight}`);
 
-  // 2. Загрузка модели
+  // Загрузка модели
   log('Загружаем модель FaceMesh…');
-  const model = await faceLandmarksDetection.load(faceLandmarksDetection.SupportedPackages.mediapipeFacemesh);
+  const model = await faceLandmarksDetection.load(
+    faceLandmarksDetection.SupportedPackages.mediapipeFacemesh
+  );
   log('Модель загружена.');
 
   const cursor = document.getElementById('cursor');
   const btn    = document.getElementById('btn');
 
-  let lastBlink = 0;
-  const BLINK_INTERVAL = 1000; // мс
-
+  let lastBlink = 0, BLINK_INTERVAL = 1000;
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
   function isBlink(u,l,le,ri){ return dist(u,l)/dist(le,ri) < 0.25; }
 
+  // Основной цикл
   async function frameLoop(){
-    const faces = await model.estimateFaces({input: video, returnTensors:false, flipHorizontal:true});
+    const faces = await model.estimateFaces({
+      input: video, returnTensors:false, flipHorizontal:true
+    });
     if(faces.length){
-      const keypoints = faces[0].scaledMesh;
+      const kp = faces[0].scaledMesh;
       const L=[33,133,159,145], R=[362,263,386,374];
 
-      const leftC  ={ x:(keypoints[L[0]][0]+keypoints[L[1]][0])/2, y:(keypoints[L[0]][1]+keypoints[L[1]][1])/2 };
-      const rightC ={ x:(keypoints[R[0]][0]+keypoints[R[1]][0])/2, y:(keypoints[R[0]][1]+keypoints[R[1]][1])/2 };
-      const gaze   ={ x:(leftC.x+rightC.x)/2, y:(leftC.y+rightC.y)/2 };
-      const screenX= gaze.x/video.videoWidth * window.innerWidth;
-      const screenY= gaze.y/video.videoHeight* window.innerHeight;
+      const leftC  = {x:(kp[L[0]][0]+kp[L[1]][0])/2, y:(kp[L[0]][1]+kp[L[1]][1])/2};
+      const rightC = {x:(kp[R[0]][0]+kp[R[1]][0])/2, y:(kp[R[0]][1]+kp[R[1]][1])/2};
+      const gaze   = {x:(leftC.x+rightC.x)/2, y:(leftC.y+rightC.y)/2};
 
-      cursor.style.left=screenX+'px';
-      cursor.style.top =screenY+'px';
+      const sx = gaze.x/video.videoWidth  * window.innerWidth;
+      const sy = gaze.y/video.videoHeight * window.innerHeight;
+      cursor.style.left = sx + 'px';
+      cursor.style.top  = sy + 'px';
 
-      const blinkL=isBlink(
-        {x:keypoints[L[2]][0],y:keypoints[L[2]][1]},
-        {x:keypoints[L[3]][0],y:keypoints[L[3]][1]},
-        {x:keypoints[L[0]][0],y:keypoints[L[0]][1]},
-        {x:keypoints[L[1]][0],y:keypoints[L[1]][1]}
+      const blinkL = isBlink(
+        {x:kp[L[2]][0],y:kp[L[2]][1]}, {x:kp[L[3]][0],y:kp[L[3]][1]},
+        {x:kp[L[0]][0],y:kp[L[0]][1]}, {x:kp[L[1]][0],y:kp[L[1]][1]}
       );
-      const blinkR=isBlink(
-        {x:keypoints[R[2]][0],y:keypoints[R[2]][1]},
-        {x:keypoints[R[3]][0],y:keypoints[R[3]][1]},
-        {x:keypoints[R[0]][0],y:keypoints[R[0]][1]},
-        {x:keypoints[R[1]][0],y:keypoints[R[1]][1]}
+      const blinkR = isBlink(
+        {x:kp[R[2]][0],y:kp[R[2]][1]}, {x:kp[R[3]][0],y:kp[R[3]][1]},
+        {x:kp[R[0]][0],y:kp[R[0]][1]}, {x:kp[R[1]][0],y:kp[R[1]][1]}
       );
-      const now=performance.now();
-      if(blinkL && blinkR && now-lastBlink>BLINK_INTERVAL){
-        lastBlink=now;
-        const rect=btn.getBoundingClientRect();
-        if(screenX>=rect.left && screenX<=rect.right && screenY>=rect.top&&screenY<=rect.bottom){
+      const now = performance.now();
+      if(blinkL && blinkR && now - lastBlink > BLINK_INTERVAL){
+        lastBlink = now;
+        const rect = btn.getBoundingClientRect();
+        if(sx >= rect.left && sx <= rect.right && sy >= rect.top && sy <= rect.bottom){
           log('Клик взглядом по кнопке!');
           btn.click();
         } else log('Blink, но не на кнопке');
