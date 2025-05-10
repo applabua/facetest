@@ -3,102 +3,123 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-  <title>Плавное управление взглядом</title>
+  <title>Калибровка взгляда + плавное Tracking</title>
   <style>
     html, body {
       margin: 0; padding: 0;
-      width: 100%; height: 100%;
-      overflow: hidden;
-      background: #000;
+      width:100%; height:100%; overflow:hidden;
+      background:#000;
+      display:flex; align-items:center; justify-content:center;
+      flex-direction:column;
+      color:#fff; font-family:sans-serif;
+    }
+    #calibration {
+      position:absolute; top:0; left:0; width:100%; height:100%;
+      display:grid; grid-template-columns: repeat(3,1fr); grid-template-rows: repeat(3,1fr);
+    }
+    .cal-point {
+      width:30px; height:30px; background:yellow; border-radius:50%;
+      justify-self:center; align-self:center; cursor:pointer;
     }
     #dot {
-      position: absolute;
-      width: 20px; height: 20px;
-      margin: -10px 0 0 -10px;
-      border-radius: 50%;
-      background: lime;
-      pointer-events: none;
-      z-index: 10;
-      will-change: transform;
+      position:absolute; width:20px; height:20px; margin:-10px 0 0 -10px;
+      border-radius:50%; background:lime; pointer-events:none; z-index:10;
+      will-change:transform;
     }
     #actionBtn {
-      position: absolute;
-      bottom: 40px; left: 50%;
-      transform: translateX(-50%);
-      padding: 15px 30px;
-      font-size: 18px;
-      border: none;
-      border-radius: 8px;
-      background: #1e90ff;
-      color: #fff;
-      z-index: 5;
+      position:absolute; bottom:40px; left:50%; transform:translateX(-50%);
+      padding:15px 30px; font-size:18px; border:none; border-radius:8px;
+      background:#1e90ff; color:#fff; z-index:5;
     }
   </style>
 </head>
 <body>
-  <button id="actionBtn">Нажми меня взглядом</button>
-  <div id="dot"></div>
+  <div id="calibration"></div>
+  <button id="actionBtn" style="display:none;">Нажми меня взглядом</button>
+  <div id="dot" style="display:none;"></div>
 
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
   <script>
-    const dot = document.getElementById('dot');
-    const btn = document.getElementById('actionBtn');
+    const calib = document.getElementById('calibration');
+    const btn   = document.getElementById('actionBtn');
+    const dot   = document.getElementById('dot');
 
-    // raw gaze
+    // создаём 9 точек
+    let points = [];
+    for(let i=0; i<9; i++){
+      const p = document.createElement('div');
+      p.className = 'cal-point';
+      p.dataset.idx = i;
+      calib.appendChild(p);
+      points.push(p);
+    }
+
+    let calibCount = 0;
+    // при клике на каждую точку — записываем калибровку
+    calib.addEventListener('click', e => {
+      if(!e.target.classList.contains('cal-point')) return;
+      const x = e.target.getBoundingClientRect().left + 15;
+      const y = e.target.getBoundingClientRect().top + 15;
+      webgazer.recordScreenPosition(x, y, 'click');
+      e.target.style.background = 'lime';
+      calibCount++;
+      if(calibCount === 9) startTracking();
+    });
+
+    function startTracking(){
+      // прячем калибровку, показываем кнопку и точку
+      calib.style.display = 'none';
+      btn.style.display = 'block';
+      dot.style.display = 'block';
+
+      // инициализируем webgazer после калибровки
+      webgazer
+        .setRegression('ridge')
+        .setGazeListener(data => {
+          if(data){
+            gazeX = data.x;
+            gazeY = data.y;
+          }
+        })
+        .begin()
+        .then(() => {
+          webgazer.showVideo(false);
+          webgazer.showFaceOverlay(false);
+          webgazer.showPredictionPoints(false);
+        });
+
+      requestAnimationFrame(animate);
+    }
+
+    // сглаживание
     let gazeX = window.innerWidth/2, gazeY = window.innerHeight/2;
-    // smoothed gaze
     let smoothX = gazeX, smoothY = gazeY;
-    const SMOOTHING = 0.2;       // от 0 (никакой фильтрации) до 1 (максимальная фильтрация)
-    const DWELL_THRESHOLD = 500; // мс для «задержки взгляда»
+    const SMOOTHING = 0.3;
+    const DWELL = 500;
+    let dwellStart = null, dwellFired = false;
 
-    let dwellStart = null;
-    let dwellTriggered = false;
-
-    // получаем «сырые» координаты
-    webgazer
-      .setRegression('ridge')
-      .setGazeListener((data) => {
-        if (data) {
-          gazeX = data.x;
-          gazeY = data.y;
-        }
-      })
-      .begin()
-      .then(() => {
-        webgazer.showVideo(false);
-        webgazer.showFaceOverlay(false);
-        webgazer.showPredictionPoints(false);
-      });
-
-    // плавная анимация точки и проверка dwell‑click
-    function animate(time) {
-      // сглаживаем
+    function animate(time){
       smoothX += (gazeX - smoothX) * SMOOTHING;
       smoothY += (gazeY - smoothY) * SMOOTHING;
-      dot.style.transform = `translate(${smoothX}px, ${smoothY}px)`;
+      dot.style.transform = `translate(${smoothX}px,${smoothY}px)`;
 
-      // проверяем, находится ли точка на кнопке
-      const rect = btn.getBoundingClientRect();
-      if (smoothX >= rect.left && smoothX <= rect.right && smoothY >= rect.top && smoothY <= rect.bottom) {
-        if (dwellStart === null) {
-          dwellStart = time;
-          dwellTriggered = false;
-        } else if (!dwellTriggered && (time - dwellStart) >= DWELL_THRESHOLD) {
-          dwellTriggered = true;
+      const r = btn.getBoundingClientRect();
+      if(smoothX>=r.left && smoothX<=r.right && smoothY>=r.top && smoothY<=r.bottom){
+        if(dwellStart===null){ dwellStart = time; dwellFired = false; }
+        else if(!dwellFired && time - dwellStart >= DWELL){
+          dwellFired = true;
           btn.click();
         }
       } else {
-        dwellStart = null;
-        dwellTriggered = false;
+        dwellStart = null; dwellFired = false;
       }
 
       requestAnimationFrame(animate);
     }
-    requestAnimationFrame(animate);
 
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', ()=>{
       btn.textContent = 'Нажато!';
-      setTimeout(() => btn.textContent = 'Нажми меня взглядом', 800);
+      setTimeout(()=> btn.textContent = 'Нажми меня взглядом', 800);
     });
   </script>
 </body>
