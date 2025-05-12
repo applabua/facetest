@@ -1,221 +1,164 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
-  <title>Eye-Control с корректным превью и счётчиком</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Photo Editor</title>
+
+  <!-- Bootstrap 5 CSS -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+    integrity="sha384-ENjdO4Dr2bkBIFxQpeoGPuXtkKtu6ug5TOeNV6gBiFeWPGFN9MuhOf23Q9Ifjh"
+    crossorigin="anonymous"
+  />
+  <!-- Font Awesome для иконок -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    integrity="sha512-pmVhPrrY4dFI5ZQF6O5a6SQX9YLSLg7z7fBpXInedaQ6Nx+J8rN6gmVVUnYrY0JrEqDlcOItIMBVKYg0h+8W5g=="
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  />
+
+  <!-- Toast UI Image Editor CSS -->
+  <link
+    rel="stylesheet"
+    href="https://uicdn.toast.com/tui-image-editor/latest/tui-image-editor.css"
+  />
+
   <style>
     html, body {
-      margin:0; padding:0;
-      width:100%; height:100%; overflow:hidden;
-      background:#000; position:relative;
-      font-family:sans-serif;
+      margin: 0; padding: 0; height: 100%; overflow: hidden;
+      background: #f8f9fa;
     }
-
-    /* Скрываем WebGazer-превью до калибровки */
-    #webgazerVideoFeed,
-    #webgazerFaceOverlay {
-      display: none !important;
+    /* Контейнер редактора: занимает всё пространство между шапкой и панелью */
+    #tui-image-editor {
+      position: absolute;
+      top: 56px;    /* высота navbar */
+      bottom: 60px; /* высота панели управления */
+      left: 0; right: 0;
     }
-    .webgazerPredictionPoint { display: none !important; }
-
-    /* Красная точка калибровки */
-    .cal-point {
-      position:absolute;
-      width:20px; height:20px;
-      margin:-10px 0 0 -10px;
-      background:#f00; border-radius:50%;
-      z-index:100; cursor:pointer;
+    /* Стили navbar */
+    .navbar-brand { font-weight: bold; }
+    /* Панель управления внизу */
+    .bottom-controls {
+      height: 60px;
+      background: #ffffff;
+      box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
     }
-    #cal-status {
-      position:absolute; top:10px; left:50%;
-      transform:translateX(-50%);
-      color:#fff; font-size:18px; z-index:100;
-      user-select:none;
-    }
-
-    /* Точка взгляда */
-    #dot {
-      position:absolute;
-      width:20px; height:20px;
-      margin:-10px 0 0 -10px;
-      border-radius:50%; background:lime;
-      pointer-events:none; z-index:50;
-      will-change:transform;
-      display:none;
-    }
-
-    /* Кнопка клика */
-    #actionBtn {
-      position:absolute;
-      bottom:80px; left:50%;
-      transform:translateX(-50%);
-      padding:15px 30px; font-size:18px;
-      border:none; border-radius:8px;
-      background:#1e90ff; color:#fff;
-      z-index:50; user-select:none;
-      display:none;
-    }
-
-    /* Счётчик кликов */
-    #clickCounter {
-      position:absolute;
-      bottom:40px; left:50%;
-      transform:translateX(-50%);
-      color:#fff; font-size:16px;
-      z-index:50; display:none;
+    .bottom-controls .btn {
+      min-width: 120px;
     }
   </style>
 </head>
 <body>
-  <div id="cal-status">Калибровка: кликните по всем 9 точкам</div>
-  <button id="actionBtn">Нажми меня взглядом</button>
-  <div id="dot"></div>
-  <div id="clickCounter">Кликов: 0</div>
 
-  <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+  <!-- Шапка -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+    <div class="container-fluid">
+      <span class="navbar-brand"><i class="fas fa-camera-retro me-2"></i>Photo Editor</span>
+    </div>
+  </nav>
+
+  <!-- Редактор -->
+  <div id="tui-image-editor"></div>
+
+  <!-- Панель управления -->
+  <div class="fixed-bottom bottom-controls d-flex align-items-center">
+    <div class="container d-flex justify-content-center gap-2">
+      <label class="btn btn-outline-secondary mb-0">
+        <i class="fas fa-upload"></i>
+        <span class="ms-1">Загрузить</span>
+        <input type="file" id="input-image" accept="image/*" hidden />
+      </label>
+      <button id="btn-enhance" class="btn btn-outline-info mb-0">
+        <i class="fas fa-magic"></i> <span class="ms-1">Улучшить</span>
+      </button>
+      <button id="btn-reset" class="btn btn-outline-warning mb-0">
+        <i class="fas fa-undo"></i> <span class="ms-1">Сбросить</span>
+      </button>
+      <button id="btn-download" class="btn btn-outline-success mb-0">
+        <i class="fas fa-download"></i> <span class="ms-1">Скачать</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Зависимости -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/4.6.0/fabric.min.js"></script>
+  <script src="https://uicdn.toast.com/tui-image-editor/latest/tui-image-editor.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/camanjs/4.1.2/caman.full.min.js"></script>
+
   <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      // Параметры
-      const BUFFER_SIZE     = 4;
-      const BLINK_THRESHOLD = 0.22;
-      const BLINK_DEBOUNCE  = 500;
-      const INVERT_X        = true;
-
-      // Состояние
-      let gazeX = window.innerWidth/2;
-      let gazeY = window.innerHeight/2;
-      let buffer = [];
-      let lastBlink = 0;
-      let calStep = 0;
-      let clickCount = 0;
-
-      // 9 точек калибровки (в % ширины/высоты)
-      const calPoints = [
-        [0.1,0.1],[0.5,0.1],[0.9,0.1],
-        [0.1,0.5],[0.5,0.5],[0.9,0.5],
-        [0.1,0.9],[0.5,0.9],[0.9,0.9]
-      ];
-
-      const statusEl = document.getElementById('cal-status');
-      const btn      = document.getElementById('actionBtn');
-      const dot      = document.getElementById('dot');
-      const counter  = document.getElementById('clickCounter');
-
-      // Рисуем калибровочные точки одну за другой
-      function showNextPoint() {
-        if (calStep >= calPoints.length) return finishCalibration();
-        const [rx, ry] = calPoints[calStep];
-        const p = document.createElement('div');
-        p.className = 'cal-point';
-        p.style.left = (rx*100) + 'vw';
-        p.style.top  = (ry*100) + 'vh';
-        p.addEventListener('click', e => {
-          // записываем калибр. позицию
-          webgazer.recordScreenPosition(e.clientX, e.clientY, 'cal');
-          p.remove();
-          calStep++;
-          statusEl.textContent = `Калибровка: ${calStep}/${calPoints.length}`;
-          showNextPoint();
-        });
-        document.body.append(p);
+    // Инициализация редактора
+    const editor = new tui.ImageEditor('#tui-image-editor', {
+      includeUI: {
+        loadImage: { path: '', name: 'Blank' },
+        theme: tui.ImageEditor.getDefaultUITheme(),
+        initMenu: 'filter',
+        menu: ['crop','flip','rotate','draw','shape','icon','text','mask','filter','resize'],
+        menuBarPosition: 'bottom'
+      },
+      cssMaxWidth: window.innerWidth,
+      cssMaxHeight: window.innerHeight - 56 - 60,
+      selectionStyle: {
+        cornerSize: 20,
+        rotatingPointOffset: 70
       }
+    });
 
-      // Завершаем калибровку
-      function finishCalibration() {
-        statusEl.textContent = 'Калибровка завершена!';
-        setTimeout(() => statusEl.style.display = 'none', 1000);
+    // Загрузка изображения
+    document.getElementById('input-image').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = evt => {
+        editor.loadImageFromURL(evt.target.result, 'UserImage')
+          .then(() => editor.clearUndoStack())
+          .catch(console.error);
+      };
+      reader.readAsDataURL(file);
+    });
 
-        // Очищаем шум и включаем Kalman-фильтр
-        webgazer.clearData();
-        webgazer.applyKalmanFilter(true);
-
-        // Появляется интерфейс управления
-        btn.style.display = 'block';
-        dot.style.display = 'block';
-        counter.style.display = 'block';
-
-        // Размер и позиция мини-превью
-        const video  = document.getElementById('webgazerVideoFeed');
-        const overlay= document.getElementById('webgazerFaceOverlay');
-        [video, overlay].forEach(el => {
-          el.style.display       = 'block';
-          el.style.position      = 'absolute';
-          el.style.width         = '160px';
-          el.style.height        = '120px';
-          el.style.top           = '10px';
-          el.style.left          = '10px';
-          el.style.transform     = 'none';
-          el.style.pointerEvents = 'none';
-          el.style.zIndex        = '50';
-        });
-        // рамка только вокруг видео
-        video.style.border       = '2px solid #0f0';
-        video.style.borderRadius = '4px';
-
-        requestAnimationFrame(animate);
-      }
-
-      // Основной цикл: позиция точки и blink-click
-      function animate(ts) {
-        // усредняем последние позиции
-        buffer.push({x:gazeX,y:gazeY});
-        if (buffer.length > BUFFER_SIZE) buffer.shift();
-        const sum = buffer.reduce((p,c)=>({x:p.x+c.x,y:p.y+c.y}),{x:0,y:0});
-        const avgX = sum.x / buffer.length;
-        const avgY = sum.y / buffer.length;
-        dot.style.transform = `translate(${avgX}px,${avgY}px)`;
-
-        // моргание по двум глазам
-        const tracker = webgazer.getTracker();
-        if (tracker) {
-          const pts = tracker.getCurrentPosition();
-          if (pts && pts.length > 33) {
-            const eyes = [
-              {o:pts[23], i:pts[25], t:pts[24], b:pts[26]},
-              {o:pts[30], i:pts[32], t:pts[31], b:pts[33]}
-            ];
-            const ears = eyes.map(e=>{
-              const w = Math.hypot(e.o[0]-e.i[0], e.o[1]-e.i[1]);
-              const h = Math.hypot(e.t[0]-e.b[0], e.t[1]-e.b[1]);
-              return h / w;
+    // Автоматическое улучшение через CamanJS
+    document.getElementById('btn-enhance').addEventListener('click', () => {
+      const canvasEl = document.querySelector('#tui-image-editor canvas.lower-canvas');
+      if (!canvasEl) return;
+      Caman(canvasEl, function () {
+        this.brightness(10)    // +10% яркости
+            .contrast(10)      // +10% контраста
+            .noise(2)          // шумоподавление
+            .render(() => {
+              // после обработки перезагрузим изображение в редактор,
+              // чтобы все функции (undo/redo и прочие) продолжили работать
+              const dataURL = canvasEl.toDataURL();
+              editor.loadImageFromURL(dataURL, 'Enhanced')
+                    .then(() => editor.clearUndoStack())
+                    .catch(console.error);
             });
-            const ear = Math.min(...ears);
-            const now = performance.now();
-            if (ear < BLINK_THRESHOLD && (now - lastBlink) > BLINK_DEBOUNCE) {
-              lastBlink = now;
-              const r = btn.getBoundingClientRect();
-              if (avgX >= r.left && avgX <= r.right && avgY >= r.top && avgY <= r.bottom) {
-                btn.click();
-              }
-            }
-          }
-        }
-        requestAnimationFrame(animate);
-      }
+      });
+    });
 
-      // Инициализация WebGazer
-      webgazer.setRegression('ridge')
-              .setTracker('clmtrackr')
-              .setGazeListener(data => {
-                if (!data) return;
-                // убираем «зеркальный» X, если нужно
-                gazeX = INVERT_X ? window.innerWidth - data.x : data.x;
-                gazeY = data.y;
-              })
-              .begin()
-              .then(() => {
-                // калибровочный цикл стартует после инициализации
-                showNextPoint();
-              })
-              .catch(err => console.error('WebGazer init error:', err));
+    // Сброс
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      editor.clear();
+      editor.loadImageFromURL('', 'Blank');
+    });
 
-      // Обработка «кликов глазами»
-      btn.addEventListener('click', () => {
-        clickCount++;
-        counter.textContent = `Кликов: ${clickCount}`;
-        btn.textContent = 'Нажато!';
-        setTimeout(() => btn.textContent = 'Нажми меня взглядом', 800);
+    // Сохранение результата
+    document.getElementById('btn-download').addEventListener('click', () => {
+      const dataURL = editor.toDataURL();
+      const link = document.createElement('a');
+      link.href = dataURL;
+      link.download = 'edited-image.png';
+      link.click();
+    });
+
+    // Подгонка размера при изменении окна
+    window.addEventListener('resize', () => {
+      editor.ui.resizeEditor({
+        width: window.innerWidth,
+        height: window.innerHeight - 56 - 60
       });
     });
   </script>
