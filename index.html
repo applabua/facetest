@@ -3,26 +3,36 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
-  <title>Eye-Control с маленькой камерой и счётчиком</title>
+  <title>Eye-Control с корректным превью и счётчиком</title>
   <style>
     html, body {
       margin:0; padding:0;
       width:100%; height:100%; overflow:hidden;
       background:#000; position:relative;
-      font-family: sans-serif;
+      font-family:sans-serif;
     }
-    /* Маленькое окно камеры и оверлей лица */
-    #webgazerVideoFeed, #webgazerFaceOverlay {
-      position:absolute!important;
-      top:10px; left:10px!important;
-      width:160px!important; height:120px!important;
-      transform:none!important;
-      pointer-events:none; z-index:1;
-      border:2px solid #0f0;
-      border-radius:4px;
+
+    /* Скрываем WebGazer-превью до калибровки */
+    #webgazerVideoFeed,
+    #webgazerFaceOverlay {
+      display: none !important;
     }
-    /* Скрываем точки предсказания WebGazer */
-    .webgazerPredictionPoint { display:none!important; }
+    .webgazerPredictionPoint { display: none !important; }
+
+    /* Красная точка калибровки */
+    .cal-point {
+      position:absolute;
+      width:20px; height:20px;
+      margin:-10px 0 0 -10px;
+      background:#f00; border-radius:50%;
+      z-index:100; cursor:pointer;
+    }
+    #cal-status {
+      position:absolute; top:10px; left:50%;
+      transform:translateX(-50%);
+      color:#fff; font-size:18px; z-index:100;
+      user-select:none;
+    }
 
     /* Точка взгляда */
     #dot {
@@ -30,43 +40,30 @@
       width:20px; height:20px;
       margin:-10px 0 0 -10px;
       border-radius:50%; background:lime;
-      pointer-events:none; z-index:10;
+      pointer-events:none; z-index:50;
       will-change:transform;
       display:none;
     }
-    /* Кнопка */
+
+    /* Кнопка клика */
     #actionBtn {
       position:absolute;
       bottom:80px; left:50%;
       transform:translateX(-50%);
       padding:15px 30px; font-size:18px;
       border:none; border-radius:8px;
-      background:#1e90ff; color:#fff; z-index:5;
-      user-select:none;
+      background:#1e90ff; color:#fff;
+      z-index:50; user-select:none;
       display:none;
     }
+
     /* Счётчик кликов */
     #clickCounter {
       position:absolute;
       bottom:40px; left:50%;
       transform:translateX(-50%);
       color:#fff; font-size:16px;
-      z-index:5;
-      display:none;
-    }
-    /* Калибровочные точки */
-    .cal-point {
-      position:absolute;
-      width:20px; height:20px;
-      margin:-10px 0 0 -10px;
-      background:#f00; border-radius:50%;
-      z-index:20; cursor:pointer;
-    }
-    #cal-status {
-      position:absolute; top:10px; left:50%;
-      transform:translateX(-50%);
-      color:#fff; font-size:18px; z-index:21;
-      user-select:none;
+      z-index:50; display:none;
     }
   </style>
 </head>
@@ -79,19 +76,21 @@
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
   <script>
     document.addEventListener('DOMContentLoaded', () => {
+      // Параметры
       const BUFFER_SIZE     = 4;
       const BLINK_THRESHOLD = 0.22;
       const BLINK_DEBOUNCE  = 500;
       const INVERT_X        = true;
 
-      let gazeX  = window.innerWidth/2;
-      let gazeY  = window.innerHeight/2;
+      // Состояние
+      let gazeX = window.innerWidth/2;
+      let gazeY = window.innerHeight/2;
       let buffer = [];
       let lastBlink = 0;
       let calStep = 0;
       let clickCount = 0;
 
-      // Координаты 9 точек для калибровки (в процентах окна)
+      // 9 точек калибровки (в % ширины/высоты)
       const calPoints = [
         [0.1,0.1],[0.5,0.1],[0.9,0.1],
         [0.1,0.5],[0.5,0.5],[0.9,0.5],
@@ -103,7 +102,7 @@
       const dot      = document.getElementById('dot');
       const counter  = document.getElementById('clickCounter');
 
-      // Рисуем следующую калибровочную точку
+      // Рисуем калибровочные точки одну за другой
       function showNextPoint() {
         if (calStep >= calPoints.length) return finishCalibration();
         const [rx, ry] = calPoints[calStep];
@@ -112,6 +111,7 @@
         p.style.left = (rx*100) + 'vw';
         p.style.top  = (ry*100) + 'vh';
         p.addEventListener('click', e => {
+          // записываем калибр. позицию
           webgazer.recordScreenPosition(e.clientX, e.clientY, 'cal');
           p.remove();
           calStep++;
@@ -126,52 +126,71 @@
         statusEl.textContent = 'Калибровка завершена!';
         setTimeout(() => statusEl.style.display = 'none', 1000);
 
+        // Очищаем шум и включаем Kalman-фильтр
         webgazer.clearData();
         webgazer.applyKalmanFilter(true);
 
-        // показываем интерфейс
+        // Появляется интерфейс управления
         btn.style.display = 'block';
         dot.style.display = 'block';
         counter.style.display = 'block';
 
+        // Размер и позиция мини-превью
+        const video  = document.getElementById('webgazerVideoFeed');
+        const overlay= document.getElementById('webgazerFaceOverlay');
+        [video, overlay].forEach(el => {
+          el.style.display       = 'block';
+          el.style.position      = 'absolute';
+          el.style.width         = '160px';
+          el.style.height        = '120px';
+          el.style.top           = '10px';
+          el.style.left          = '10px';
+          el.style.transform     = 'none';
+          el.style.pointerEvents = 'none';
+          el.style.zIndex        = '50';
+        });
+        // рамка только вокруг видео
+        video.style.border       = '2px solid #0f0';
+        video.style.borderRadius = '4px';
+
         requestAnimationFrame(animate);
       }
 
-      // Основной цикл: точка + blink-click
+      // Основной цикл: позиция точки и blink-click
       function animate(ts) {
-        // усреднение
+        // усредняем последние позиции
         buffer.push({x:gazeX,y:gazeY});
-        if (buffer.length>BUFFER_SIZE) buffer.shift();
+        if (buffer.length > BUFFER_SIZE) buffer.shift();
         const sum = buffer.reduce((p,c)=>({x:p.x+c.x,y:p.y+c.y}),{x:0,y:0});
-        const avgX = sum.x/buffer.length, avgY = sum.y/buffer.length;
+        const avgX = sum.x / buffer.length;
+        const avgY = sum.y / buffer.length;
         dot.style.transform = `translate(${avgX}px,${avgY}px)`;
 
-        // blink-click по 2 глазам
+        // моргание по двум глазам
         const tracker = webgazer.getTracker();
         if (tracker) {
           const pts = tracker.getCurrentPosition();
-          if (pts && pts.length>33) {
+          if (pts && pts.length > 33) {
             const eyes = [
               {o:pts[23], i:pts[25], t:pts[24], b:pts[26]},
               {o:pts[30], i:pts[32], t:pts[31], b:pts[33]}
             ];
             const ears = eyes.map(e=>{
-              const w=Math.hypot(e.o[0]-e.i[0],e.o[1]-e.i[1]);
-              const h=Math.hypot(e.t[0]-e.b[0],e.t[1]-e.b[1]);
-              return h/w;
+              const w = Math.hypot(e.o[0]-e.i[0], e.o[1]-e.i[1]);
+              const h = Math.hypot(e.t[0]-e.b[0], e.t[1]-e.b[1]);
+              return h / w;
             });
             const ear = Math.min(...ears);
             const now = performance.now();
-            if (ear < BLINK_THRESHOLD && now - lastBlink > BLINK_DEBOUNCE) {
+            if (ear < BLINK_THRESHOLD && (now - lastBlink) > BLINK_DEBOUNCE) {
               lastBlink = now;
               const r = btn.getBoundingClientRect();
-              if (avgX>=r.left && avgX<=r.right && avgY>=r.top && avgY<=r.bottom) {
+              if (avgX >= r.left && avgX <= r.right && avgY >= r.top && avgY <= r.bottom) {
                 btn.click();
               }
             }
           }
         }
-
         requestAnimationFrame(animate);
       }
 
@@ -180,22 +199,18 @@
               .setTracker('clmtrackr')
               .setGazeListener(data => {
                 if (!data) return;
-                const x = INVERT_X
-                  ? window.innerWidth - data.x
-                  : data.x;
-                gazeX = x;
+                // убираем «зеркальный» X, если нужно
+                gazeX = INVERT_X ? window.innerWidth - data.x : data.x;
                 gazeY = data.y;
               })
               .begin()
               .then(() => {
-                webgazer.showVideo(true);
-                webgazer.showFaceOverlay(true);
-                webgazer.showPredictionPoints(false);
+                // калибровочный цикл стартует после инициализации
                 showNextPoint();
               })
               .catch(err => console.error('WebGazer init error:', err));
 
-      // Обработка кликов и обновление счётчика
+      // Обработка «кликов глазами»
       btn.addEventListener('click', () => {
         clickCount++;
         counter.textContent = `Кликов: ${clickCount}`;
