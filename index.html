@@ -3,22 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
-  <title>Eye-Control с Калибровкой</title>
+  <title>Eye-Control с маленькой камерой и счётчиком</title>
   <style>
     html, body {
       margin:0; padding:0;
       width:100%; height:100%; overflow:hidden;
       background:#000; position:relative;
+      font-family: sans-serif;
     }
-    /* Видео и оверлей лица на весь экран */
+    /* Маленькое окно камеры и оверлей лица */
     #webgazerVideoFeed, #webgazerFaceOverlay {
       position:absolute!important;
-      top:0; left:0!important;
-      width:100vw!important; height:100vh!important;
+      top:10px; left:10px!important;
+      width:160px!important; height:120px!important;
       transform:none!important;
       pointer-events:none; z-index:1;
+      border:2px solid #0f0;
+      border-radius:4px;
     }
-    /* Скрываем точки WebGazer */
+    /* Скрываем точки предсказания WebGazer */
     .webgazerPredictionPoint { display:none!important; }
 
     /* Точка взгляда */
@@ -29,16 +32,27 @@
       border-radius:50%; background:lime;
       pointer-events:none; z-index:10;
       will-change:transform;
+      display:none;
     }
     /* Кнопка */
     #actionBtn {
       position:absolute;
-      bottom:40px; left:50%;
+      bottom:80px; left:50%;
       transform:translateX(-50%);
       padding:15px 30px; font-size:18px;
       border:none; border-radius:8px;
       background:#1e90ff; color:#fff; z-index:5;
       user-select:none;
+      display:none;
+    }
+    /* Счётчик кликов */
+    #clickCounter {
+      position:absolute;
+      bottom:40px; left:50%;
+      transform:translateX(-50%);
+      color:#fff; font-size:16px;
+      z-index:5;
+      display:none;
     }
     /* Калибровочные точки */
     .cal-point {
@@ -58,8 +72,9 @@
 </head>
 <body>
   <div id="cal-status">Калибровка: кликните по всем 9 точкам</div>
-  <button id="actionBtn" style="display:none">Нажми меня взглядом</button>
-  <div id="dot" style="display:none"></div>
+  <button id="actionBtn">Нажми меня взглядом</button>
+  <div id="dot"></div>
+  <div id="clickCounter">Кликов: 0</div>
 
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
   <script>
@@ -67,13 +82,16 @@
       const BUFFER_SIZE     = 4;
       const BLINK_THRESHOLD = 0.22;
       const BLINK_DEBOUNCE  = 500;
-      const INVERT_X        = true;  // инверсия по X, чтобы убрать «зеркальность»
+      const INVERT_X        = true;
 
       let gazeX  = window.innerWidth/2;
       let gazeY  = window.innerHeight/2;
       let buffer = [];
       let lastBlink = 0;
       let calStep = 0;
+      let clickCount = 0;
+
+      // Координаты 9 точек для калибровки (в процентах окна)
       const calPoints = [
         [0.1,0.1],[0.5,0.1],[0.9,0.1],
         [0.1,0.5],[0.5,0.5],[0.9,0.5],
@@ -81,10 +99,11 @@
       ];
 
       const statusEl = document.getElementById('cal-status');
-      const btn = document.getElementById('actionBtn');
-      const dot = document.getElementById('dot');
+      const btn      = document.getElementById('actionBtn');
+      const dot      = document.getElementById('dot');
+      const counter  = document.getElementById('clickCounter');
 
-      // Создаём и показываем калибровочные точки
+      // Рисуем следующую калибровочную точку
       function showNextPoint() {
         if (calStep >= calPoints.length) return finishCalibration();
         const [rx, ry] = calPoints[calStep];
@@ -94,43 +113,47 @@
         p.style.top  = (ry*100) + 'vh';
         p.addEventListener('click', e => {
           webgazer.recordScreenPosition(e.clientX, e.clientY, 'cal');
-          p.remove(); calStep++;
+          p.remove();
+          calStep++;
           statusEl.textContent = `Калибровка: ${calStep}/${calPoints.length}`;
           showNextPoint();
         });
         document.body.append(p);
       }
 
+      // Завершаем калибровку
       function finishCalibration() {
         statusEl.textContent = 'Калибровка завершена!';
         setTimeout(() => statusEl.style.display = 'none', 1000);
-        // очищаем избыточные данные и включаем фильтр
+
         webgazer.clearData();
         webgazer.applyKalmanFilter(true);
 
         // показываем интерфейс
         btn.style.display = 'block';
         dot.style.display = 'block';
+        counter.style.display = 'block';
+
         requestAnimationFrame(animate);
       }
 
-      // Анимация точки и blink-click
+      // Основной цикл: точка + blink-click
       function animate(ts) {
-        // Усредняем
+        // усреднение
         buffer.push({x:gazeX,y:gazeY});
         if (buffer.length>BUFFER_SIZE) buffer.shift();
         const sum = buffer.reduce((p,c)=>({x:p.x+c.x,y:p.y+c.y}),{x:0,y:0});
         const avgX = sum.x/buffer.length, avgY = sum.y/buffer.length;
         dot.style.transform = `translate(${avgX}px,${avgY}px)`;
 
-        // Blink-click по обоим глазам
+        // blink-click по 2 глазам
         const tracker = webgazer.getTracker();
         if (tracker) {
           const pts = tracker.getCurrentPosition();
           if (pts && pts.length>33) {
             const eyes = [
-              {o:pts[23],i:pts[25],t:pts[24],b:pts[26]},
-              {o:pts[30],i:pts[32],t:pts[31],b:pts[33]}
+              {o:pts[23], i:pts[25], t:pts[24], b:pts[26]},
+              {o:pts[30], i:pts[32], t:pts[31], b:pts[33]}
             ];
             const ears = eyes.map(e=>{
               const w=Math.hypot(e.o[0]-e.i[0],e.o[1]-e.i[1]);
@@ -139,39 +162,45 @@
             });
             const ear = Math.min(...ears);
             const now = performance.now();
-            if (ear<BLINK_THRESHOLD && now-lastBlink>BLINK_DEBOUNCE) {
+            if (ear < BLINK_THRESHOLD && now - lastBlink > BLINK_DEBOUNCE) {
               lastBlink = now;
-              const r=btn.getBoundingClientRect();
+              const r = btn.getBoundingClientRect();
               if (avgX>=r.left && avgX<=r.right && avgY>=r.top && avgY<=r.bottom) {
                 btn.click();
               }
             }
           }
         }
+
         requestAnimationFrame(animate);
       }
 
       // Инициализация WebGazer
       webgazer.setRegression('ridge')
               .setTracker('clmtrackr')
-              .setGazeListener(data=>{
+              .setGazeListener(data => {
                 if (!data) return;
-                const x = INVERT_X ? window.innerWidth - data.x : data.x;
-                gazeX = x; gazeY = data.y;
+                const x = INVERT_X
+                  ? window.innerWidth - data.x
+                  : data.x;
+                gazeX = x;
+                gazeY = data.y;
               })
               .begin()
-              .then(()=>{
+              .then(() => {
                 webgazer.showVideo(true);
                 webgazer.showFaceOverlay(true);
                 webgazer.showPredictionPoints(false);
                 showNextPoint();
               })
-              .catch(err=>console.error(err));
+              .catch(err => console.error('WebGazer init error:', err));
 
-      // Отклик на клик
-      btn.addEventListener('click',()=>{
-        btn.textContent='Нажато!';
-        setTimeout(()=>btn.textContent='Нажми меня взглядом',800);
+      // Обработка кликов и обновление счётчика
+      btn.addEventListener('click', () => {
+        clickCount++;
+        counter.textContent = `Кликов: ${clickCount}`;
+        btn.textContent = 'Нажато!';
+        setTimeout(() => btn.textContent = 'Нажми меня взглядом', 800);
       });
     });
   </script>
