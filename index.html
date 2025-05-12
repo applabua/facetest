@@ -3,17 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no"/>
-  <title>Молниеносное Eye-Control</title>
+  <title>Ultra Eye-Control</title>
   <style>
     html, body {
       margin: 0; padding: 0;
       width: 100%; height: 100%; overflow: hidden;
-      background: #000;
-      position: relative;
+      background: #000; position: relative;
     }
-    /* Скрываем все оверлеи WebGazer для производительности */
+    /* Видео-поток и оверлей лица на весь экран, без отражения */
     #webgazerVideoFeed,
-    #webgazerFaceOverlay,
+    #webgazerFaceOverlay {
+      position: absolute !important;
+      top: 0; left: 0 !important;
+      width: 100vw !important; height: 100vh !important;
+      transform: none !important;
+      pointer-events: none; z-index: 1;
+    }
+    /* Скрываем точки предсказания WebGazer */
     .webgazerPredictionPoint {
       display: none !important;
     }
@@ -56,41 +62,48 @@
       const btn = document.getElementById('actionBtn');
 
       // Параметры
-      const BUFFER_SIZE       = 4;      // усреднение — меньше буфера = меньше задержка
-      const BLINK_THRESHOLD   = 0.18;   // порог отношения высоты к ширине глаза
-      const BLINK_DEBOUNCE    = 500;    // минимальный интервал между кликами (мс)
+      const BUFFER_SIZE     = 4;     // Меньше = меньше задержка, но чуть больше дерганий
+      const BLINK_THRESHOLD = 0.20;  // Порог EAR (отношение высоты/ширины)
+      const BLINK_DEBOUNCE  = 500;   // Интервал между кликами (мс)
 
       let buffer = [];
       let gazeX  = window.innerWidth / 2;
       let gazeY  = window.innerHeight / 2;
       let lastBlinkTime = 0;
 
-      // Обновляем при изменении размеров окна
+      // Адаптация под изменение экрана
       window.addEventListener('resize', () => {
         gazeX = window.innerWidth / 2;
         gazeY = window.innerHeight / 2;
       });
 
-      // Основной цикл: двигаем точку, проверяем мигание
+      // Основной цикл анимации и blink-click
       function animate(ts) {
-        // 1) Усреднение координат
+        // 1) Усреднение координат для плавности
         buffer.push({ x: gazeX, y: gazeY });
         if (buffer.length > BUFFER_SIZE) buffer.shift();
-        const avg = buffer.reduce((p, c) => ({ x: p.x + c.x, y: p.y + c.y }), { x:0, y:0 });
-        const avgX = avg.x / buffer.length;
-        const avgY = avg.y / buffer.length;
+        const sum = buffer.reduce((p, c) => ({ x: p.x + c.x, y: p.y + c.y }), { x: 0, y: 0 });
+        const avgX = sum.x / buffer.length;
+        const avgY = sum.y / buffer.length;
         dot.style.transform = `translate(${avgX}px, ${avgY}px)`;
 
-        // 2) Blink-click
+        // 2) Blink-click по обоим глазам
         const tracker = webgazer.getTracker();
         if (tracker) {
           const pts = tracker.getCurrentPosition();
-          if (pts && pts.length > 26) {
-            // вычисляем EAR для одного глаза
-            const [outer, inner, top, bottom] = [pts[23], pts[25], pts[24], pts[26]];
-            const w = Math.hypot(outer[0] - inner[0], outer[1] - inner[1]);
-            const h = Math.hypot(top[0]   - bottom[0],   top[1]   - bottom[1]);
-            const ear = h / w;
+          if (pts && pts.length > 33) {
+            // Данные по глазам (правый и левый)
+            const eyes = [
+              { outer: pts[23], inner: pts[25], top: pts[24], bottom: pts[26] },
+              { outer: pts[30], inner: pts[32], top: pts[31], bottom: pts[33] }
+            ];
+            // Вычисляем EAR и берём минимальное для надёжности
+            const ears = eyes.map(e => {
+              const w = Math.hypot(e.outer[0] - e.inner[0], e.outer[1] - e.inner[1]);
+              const h = Math.hypot(e.top[0]   - e.bottom[0],   e.top[1]   - e.bottom[1]);
+              return h / w;
+            });
+            const ear = Math.min(...ears);
             const now = performance.now();
             if (ear < BLINK_THRESHOLD && now - lastBlinkTime > BLINK_DEBOUNCE) {
               lastBlinkTime = now;
@@ -105,10 +118,11 @@
         requestAnimationFrame(animate);
       }
 
-      // Запускаем WebGazer
+      // Инициализация WebGazer
       webgazer
-        .setRegression('ridge')
-        .setGazeListener(data => {
+        .setRegression('ridge')         // регрессия Ridge
+        .setTracker('clmtrackr')        // мощный трекер CLM
+        .setGazeListener(data => {      // слушатель положения взгляда
           if (data) {
             gazeX = data.x;
             gazeY = data.y;
@@ -116,17 +130,16 @@
         })
         .begin()
         .then(() => {
-          // скрываем оверлеи для скорости
-          webgazer.showVideo(false);
-          webgazer.showFaceOverlay(false);
+          // Показываем видео и оверлей лица в полноэкранном режиме
+          webgazer.showVideo(true);
+          webgazer.showFaceOverlay(true);
           webgazer.showPredictionPoints(false);
-
-          // старт цикла после инициализации
+          // Старт основного цикла
           requestAnimationFrame(animate);
         })
-        .catch(e => console.error('Ошибка инициализации WebGazer:', e));
+        .catch(err => console.error('WebGazer init error:', err));
 
-      // Визуальная реакция на клик
+      // Визуальный отклик на клик
       btn.addEventListener('click', () => {
         btn.textContent = 'Нажато!';
         setTimeout(() => btn.textContent = 'Нажми меня взглядом', 800);
