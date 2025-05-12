@@ -2,39 +2,46 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-  <title>Исправленное Eye‑Control</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no"/>
+  <title>Молниеносное Eye-Control</title>
   <style>
     html, body {
       margin: 0; padding: 0;
-      width:100%; height:100%; overflow:hidden;
-      background:#000; position: relative;
+      width: 100%; height: 100%; overflow: hidden;
+      background: #000;
+      position: relative;
     }
-    /* Видео‑оверлей и сетка лица */
+    /* Скрываем все оверлеи WebGazer для производительности */
     #webgazerVideoFeed,
-    #webgazerFaceOverlay {
-      position: absolute !important;
-      top: 0; left: 0;
-      width: 100% !important; height: 100% !important;
-      pointer-events: none; z-index: 1;
+    #webgazerFaceOverlay,
+    .webgazerPredictionPoint {
+      display: none !important;
     }
-    /* Точка взгляда */
+    /* Наша «точка взгляда» */
     #dot {
       position: absolute;
       width: 20px; height: 20px;
       margin: -10px 0 0 -10px;
-      border-radius: 50%; background: lime;
-      pointer-events: none; z-index: 10;
+      border-radius: 50%;
+      background: lime;
+      pointer-events: none;
+      z-index: 10;
       will-change: transform;
     }
-    /* Кнопка для клика глазом */
+    /* Кнопка */
     #actionBtn {
       position: absolute;
-      bottom: 40px; left: 50%;
+      bottom: 40px;
+      left: 50%;
       transform: translateX(-50%);
-      padding: 15px 30px; font-size: 18px;
-      border: none; border-radius: 8px;
-      background: #1e90ff; color: #fff; z-index: 5;
+      padding: 15px 30px;
+      font-size: 18px;
+      border: none;
+      border-radius: 8px;
+      background: #1e90ff;
+      color: #fff;
+      z-index: 5;
+      user-select: none;
     }
   </style>
 </head>
@@ -44,47 +51,49 @@
 
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
   <script>
-    const dot = document.getElementById('dot');
-    const btn = document.getElementById('actionBtn');
+    document.addEventListener('DOMContentLoaded', () => {
+      const dot = document.getElementById('dot');
+      const btn = document.getElementById('actionBtn');
 
-    // буфер для усреднения
-    const BUFFER_SIZE = 8;
-    let buffer = [];
+      // Параметры
+      const BUFFER_SIZE       = 4;      // усреднение — меньше буфера = меньше задержка
+      const BLINK_THRESHOLD   = 0.18;   // порог отношения высоты к ширине глаза
+      const BLINK_DEBOUNCE    = 500;    // минимальный интервал между кликами (мс)
 
-    // начальные «сырые» координаты
-    let gazeX = window.innerWidth/2, gazeY = window.innerHeight/2;
+      let buffer = [];
+      let gazeX  = window.innerWidth / 2;
+      let gazeY  = window.innerHeight / 2;
+      let lastBlinkTime = 0;
 
-    // параметры blink‑click
-    const BLINK_THRESHOLD = 0.15;
-    const BLINK_DEBOUNCE = 600;
-    let lastBlinkTime = 0;
+      // Обновляем при изменении размеров окна
+      window.addEventListener('resize', () => {
+        gazeX = window.innerWidth / 2;
+        gazeY = window.innerHeight / 2;
+      });
 
-    // Функция анимации — двигает точку и обрабатывает blink‑click
-    function animate(time) {
-      // усреднение положения
-      buffer.push({x: gazeX, y: gazeY});
-      if (buffer.length > BUFFER_SIZE) buffer.shift();
-      let sumX = 0, sumY = 0;
-      buffer.forEach(p=>{ sumX+=p.x; sumY+=p.y; });
-      const avgX = sumX/buffer.length, avgY = sumY/buffer.length;
+      // Основной цикл: двигаем точку, проверяем мигание
+      function animate(ts) {
+        // 1) Усреднение координат
+        buffer.push({ x: gazeX, y: gazeY });
+        if (buffer.length > BUFFER_SIZE) buffer.shift();
+        const avg = buffer.reduce((p, c) => ({ x: p.x + c.x, y: p.y + c.y }), { x:0, y:0 });
+        const avgX = avg.x / buffer.length;
+        const avgY = avg.y / buffer.length;
+        dot.style.transform = `translate(${avgX}px, ${avgY}px)`;
 
-      dot.style.transform = `translate(${avgX}px, ${avgY}px)`;
-
-      // blink‑click, только если есть трекер
-      try {
+        // 2) Blink-click
         const tracker = webgazer.getTracker();
         if (tracker) {
-          const positions = tracker.getCurrentPosition(); // массив точек лица
-          if (positions && positions.length > 26) {
-            // точки левого глаза
-            const outer = positions[23], inner = positions[25];
-            const top   = positions[24], bottom = positions[26];
-            const w = Math.hypot(outer[0]-inner[0], outer[1]-inner[1]);
-            const h = Math.hypot(top[0]-bottom[0], top[1]-bottom[1]);
-            const ratio = h / w;
-            if (ratio < BLINK_THRESHOLD && (time - lastBlinkTime) > BLINK_DEBOUNCE) {
-              lastBlinkTime = time;
-              // если взгляд над кнопкой — кликаем
+          const pts = tracker.getCurrentPosition();
+          if (pts && pts.length > 26) {
+            // вычисляем EAR для одного глаза
+            const [outer, inner, top, bottom] = [pts[23], pts[25], pts[24], pts[26]];
+            const w = Math.hypot(outer[0] - inner[0], outer[1] - inner[1]);
+            const h = Math.hypot(top[0]   - bottom[0],   top[1]   - bottom[1]);
+            const ear = h / w;
+            const now = performance.now();
+            if (ear < BLINK_THRESHOLD && now - lastBlinkTime > BLINK_DEBOUNCE) {
+              lastBlinkTime = now;
               const r = btn.getBoundingClientRect();
               if (avgX >= r.left && avgX <= r.right && avgY >= r.top && avgY <= r.bottom) {
                 btn.click();
@@ -92,37 +101,36 @@
             }
           }
         }
-      } catch (e) {
-        // игнорируем любые ошибки трекера
+
+        requestAnimationFrame(animate);
       }
 
-      requestAnimationFrame(animate);
-    }
+      // Запускаем WebGazer
+      webgazer
+        .setRegression('ridge')
+        .setGazeListener(data => {
+          if (data) {
+            gazeX = data.x;
+            gazeY = data.y;
+          }
+        })
+        .begin()
+        .then(() => {
+          // скрываем оверлеи для скорости
+          webgazer.showVideo(false);
+          webgazer.showFaceOverlay(false);
+          webgazer.showPredictionPoints(false);
 
-    // Инициализация WebGazer
-    webgazer
-      .setRegression('ridge')
-      .setGazeListener(data => {
-        if (data) {
-          gazeX = data.x;
-          gazeY = data.y;
-        }
-      })
-      .begin()
-      .then(() => {
-        webgazer.showVideo(true);
-        webgazer.showFaceOverlay(true);
-        // не рисуем точки WebGazer, нашу точку видно чётче
-        webgazer.showPredictionPoints(false);
+          // старт цикла после инициализации
+          requestAnimationFrame(animate);
+        })
+        .catch(e => console.error('Ошибка инициализации WebGazer:', e));
 
-        // стартуем анимацию только после полной инициализации
-        requestAnimationFrame(animate);
+      // Визуальная реакция на клик
+      btn.addEventListener('click', () => {
+        btn.textContent = 'Нажато!';
+        setTimeout(() => btn.textContent = 'Нажми меня взглядом', 800);
       });
-
-    // реакция на клик
-    btn.addEventListener('click', () => {
-      btn.textContent = 'Нажато!';
-      setTimeout(() => btn.textContent = 'Нажми меня взглядом', 800);
     });
   </script>
 </body>
